@@ -39,22 +39,15 @@ ifneq ($(filter msm8974 msm8x74 msm8226 msm8x26,$(TARGET_BOARD_PLATFORM)),)
     common_flags += -DMDSS_TARGET
 endif
 
-common_deps  :=
-kernel_includes :=
-
 # Executed only on QCOM BSPs
 ifeq ($(TARGET_USES_QCOM_BSP),true)
 # This flag is used to compile out any features that depend on framework changes
     common_flags += -DQCOM_BSP
 endif
-ifneq (,$(filter $(QCOM_BOARD_PLATFORMS),$(TARGET_BOARD_PLATFORM)))
-# This check is to pick the kernel headers from the right location.
-# If the macro above is defined, we make the assumption that we have the kernel
-# available in the build tree.
-# If the macro is not present, the headers are picked from hardware/qcom/msmXXXX
-# failing which, they are picked from bionic.
-    common_deps += $(TARGET_OUT_INTERMEDIATES)/KERNEL_OBJ/usr
-    kernel_includes += $(TARGET_OUT_INTERMEDIATES)/KERNEL_OBJ/usr/include
+ifeq ($(call is-vendor-board-platform,QCOM),true)
+
+common_deps += $(TARGET_OUT_INTERMEDIATES)/KERNEL_OBJ/usr
+kernel_includes += $(TARGET_OUT_INTERMEDIATES)/KERNEL_OBJ/usr/include
 endif
 
 ifneq ($(TARGET_DISPLAY_INSECURE_MM_HEAP),true)
@@ -63,4 +56,8 @@ endif
 
 ifeq ($(TARGET_BOARD_PLATFORM),msm8660)
     common_flags += -DNO_IOMMU
+endif
+
+ifeq ($(TARGET_DISPLAY_USE_RETIRE_FENCE),true)
+    common_flags += -DUSE_RETIRE_FENCE
 endif
