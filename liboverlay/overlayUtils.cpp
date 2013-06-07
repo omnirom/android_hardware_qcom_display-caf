@@ -191,6 +191,11 @@ int getHALFormat(int mdpFormat) {
 int getDownscaleFactor(const int& src_w, const int& src_h,
         const int& dst_w, const int& dst_h) {
     int dscale_factor = utils::ROT_DS_NONE;
+    // The tolerance is an empirical grey area that needs to be adjusted
+    // manually so that we always err on the side of caution
+#ifdef USE_RETIRE_FENCE
+    float fDscaleTolerance = 0.05;
+#endif
     // We need this check to engage the rotator whenever possible to assist MDP
     // in performing video downscale.
     // This saves bandwidth and avoids causing the driver to make too many panel
@@ -198,14 +203,23 @@ int getDownscaleFactor(const int& src_w, const int& src_h,
     // Use-case: Video playback [with downscaling and rotation].
     if (dst_w && dst_h)
     {
-        float fDscale =  (float)(src_w * src_h) / (float)(dst_w * dst_h);
+#ifdef USE_RETIRE_FENCE
+        float fDscale =  sqrtf((float)(src_w * src_h) / (float)(dst_w * dst_h)) +
+                         fDscaleTolerance;
+#else
+        float fDscale = (float)(src_w * src_h) / (float)(dst_w * dst_h);
+#endif
 
         // On our MTP 1080p playback case downscale after sqrt is coming to 1.87
         // we were rounding to 1. So entirely MDP has to do the downscaling.
         // BW requirement and clock requirement is high across MDP4 targets.
         // It is unable to downscale 1080p video to panel resolution on 8960.
         // round(x) will round it to nearest integer and avoids above issue.
+#ifdef USE_RETIRE_FENCE
+        uint32_t dscale = round(fDscale);
+#else
         uint32_t dscale = round(sqrtf(fDscale));
+#endif
 
         if(dscale < 2) {
             // Down-scale to > 50% of orig.
