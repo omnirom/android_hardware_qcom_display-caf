@@ -47,6 +47,7 @@ ifeq ($(TARGET_USES_QCOM_BSP),true)
 # This flag is used to compile out any features that depend on framework changes
     common_flags += -DQCOM_BSP
 endif
+
 ifneq (,$(filter $(QCOM_BOARD_PLATFORMS),$(TARGET_BOARD_PLATFORM)))
 # This check is to pick the kernel headers from the right location.
 # If the macro above is defined, we make the assumption that we have the kernel
@@ -59,4 +60,8 @@ endif
 
 ifneq ($(TARGET_DISPLAY_INSECURE_MM_HEAP),true)
     common_flags += -DSECURE_MM_HEAP
+endif
+
+ifeq ($(TARGET_DISPLAY_USE_RETIRE_FENCE),true)
+    common_flags += -DUSE_RETIRE_FENCE
 endif
