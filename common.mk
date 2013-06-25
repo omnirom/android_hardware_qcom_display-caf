@@ -64,3 +64,7 @@ endif
 ifeq ($(TARGET_BOARD_PLATFORM),msm8660)
     common_flags += -DNO_IOMMU
 endif
+
+ifeq ($(TARGET_DISPLAY_USE_RETIRE_FENCE),true)
+    common_flags += -DUSE_RETIRE_FENCE
+endif
