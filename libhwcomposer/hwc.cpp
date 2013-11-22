@@ -52,6 +52,8 @@ static struct hw_module_methods_t hwc_module_methods = {
     open: hwc_device_open
 };
 
+static void reset_panel(struct hwc_composer_device_1* dev);
+
 hwc_module_t HAL_MODULE_INFO_SYM = {
     common: {
         tag: HARDWARE_MODULE_TAG,
@@ -255,6 +257,12 @@ static int hwc_prepare(hwc_composer_device_1 *dev, size_t numDisplays,
 {
     int ret = 0;
     hwc_context_t* ctx = (hwc_context_t*)(dev);
+
+    if (ctx->mPanelResetStatus) {
+        ALOGW("%s: panel is in bad state. reset the panel", __FUNCTION__);
+        reset_panel(dev);
+    }
+
     //Will be unlocked at the end of set
     ctx->mDrawLock.lock();
     reset(ctx, numDisplays, displays);
@@ -430,6 +438,33 @@ static int hwc_blank(struct hwc_composer_device_1* dev, int dpy, int blank)
           blank ? "blanking":"unblanking", dpy);
     return ret;
 }
+
+static void reset_panel(struct hwc_composer_device_1* dev)
+{
+    int ret = 0;
+    hwc_context_t* ctx = (hwc_context_t*)(dev);
+
+    if (!ctx->mPanelResetStatus)
+        return;
+
+    ALOGD("%s: calling BLANK DISPLAY", __FUNCTION__);
+    ret = hwc_blank(dev, HWC_DISPLAY_PRIMARY, 1);
+    if (ret < 0) {
+        ALOGE("%s: FBIOBLANK failed to BLANK:  %s", __FUNCTION__,
+                                                            strerror(errno));
+    }
+
+    ALOGD("%s: calling UNBLANK DISPLAY and enabling vsync", __FUNCTION__);
+    ret = hwc_blank(dev, HWC_DISPLAY_PRIMARY, 0);
+    if (ret < 0) {
+        ALOGE("%s: FBIOBLANK failed to UNBLANK : %s", __FUNCTION__,
+                                                            strerror(errno));
+    }
+    hwc_vsync_control(ctx, HWC_DISPLAY_PRIMARY, 1);
+
+    ctx->mPanelResetStatus = false;
+}
+
 
 static int hwc_query(struct hwc_composer_device_1* dev,
                      int param, int* value)
@@ -784,7 +819,7 @@ static int hwc_device_open(const struct hw_module_t* module, const char* name,
 
         //Setup HWC methods
         dev->device.common.tag          = HARDWARE_DEVICE_TAG;
-        dev->device.common.version      = HWC_DEVICE_API_VERSION_1_2;
+        dev->device.common.version      = HWC_DEVICE_API_VERSION_1_3;
         dev->device.common.module       = const_cast<hw_module_t*>(module);
         dev->device.common.close        = hwc_device_close;
         dev->device.prepare             = hwc_prepare;

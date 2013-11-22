@@ -291,6 +291,12 @@ void getActionSafePosition(hwc_context_t *ctx, int dpy, hwc_rect_t& rect) {
 
     float fbWidth = ctx->dpyAttr[dpy].xres;
     float fbHeight = ctx->dpyAttr[dpy].yres;
+    if(ctx->dpyAttr[dpy].mDownScaleMode) {
+        // if downscale Mode is enabled for external, need to query
+        // the actual width and height, as that is the physical w & h
+        ctx->mExtDisplay->getAttributes((int&)fbWidth, (int&)fbHeight);
+    }
+
 
     // Since external is rotated 90, need to swap width/height
     int extOrient = getExtOrientation(ctx);
@@ -584,7 +590,7 @@ bool needsScaling(hwc_context_t* ctx, hwc_layer_1_t const* layer,
     int dst_w, dst_h, src_w, src_h;
 
     hwc_rect_t displayFrame  = layer->displayFrame;
-    hwc_rect_t sourceCrop = layer->sourceCrop;
+    hwc_rect_t sourceCrop = integerizeSourceCrop(layer->sourceCropf);
     trimLayer(ctx, dpy, layer->transform, sourceCrop, displayFrame);
 
     dst_w = displayFrame.right - displayFrame.left;
@@ -652,6 +658,8 @@ void setListStats(hwc_context_t *ctx,
     ctx->listStats[dpy].yuvCount = 0;
     ctx->listStats[dpy].extOnlyLayerIndex = -1;
     ctx->listStats[dpy].isDisplayAnimating = false;
+
+    optimizeLayerRects(ctx, list, dpy);
 
     for (size_t i = 0; i < (size_t)ctx->listStats[dpy].numAppLayers; i++) {
         hwc_layer_1_t const* layer = &list->hwLayers[i];
@@ -845,6 +853,115 @@ void calculate_crop_rects(hwc_rect_t& crop, hwc_rect_t& dst,
     crop_b -= crop_h * bottomCutRatio;
 }
 
+bool isValidRect(const hwc_rect& rect)
+{
+   return ((rect.bottom > rect.top) && (rect.right > rect.left)) ;
+}
+
+/* computes the intersection of two rects */
+hwc_rect_t getIntersection(const hwc_rect_t& rect1, const hwc_rect_t& rect2)
+{
+   hwc_rect_t res;
+
+   if(!isValidRect(rect1) || !isValidRect(rect2)){
+      return (hwc_rect_t){0, 0, 0, 0};
+   }
+
+
+   res.left = max(rect1.left, rect2.left);
+   res.top = max(rect1.top, rect2.top);
+   res.right = min(rect1.right, rect2.right);
+   res.bottom = min(rect1.bottom, rect2.bottom);
+
+   if(!isValidRect(res))
+      return (hwc_rect_t){0, 0, 0, 0};
+
+   return res;
+}
+
+/* computes the union of two rects */
+hwc_rect_t getUnion(const hwc_rect &rect1, const hwc_rect &rect2)
+{
+   hwc_rect_t res;
+
+   if(!isValidRect(rect1)){
+      return rect2;
+   }
+
+   if(!isValidRect(rect2)){
+      return rect1;
+   }
+
+   res.left = min(rect1.left, rect2.left);
+   res.top = min(rect1.top, rect2.top);
+   res.right =  max(rect1.right, rect2.right);
+   res.bottom =  max(rect1.bottom, rect2.bottom);
+
+   return res;
+}
+
+/* deducts given rect from layers display-frame and source crop.
+   also it avoid hole creation.*/
+void deductRect(const hwc_layer_1_t* layer, hwc_rect_t& irect) {
+    hwc_rect_t& disprect = (hwc_rect_t&)layer->displayFrame;
+    hwc_rect_t srcrect = integerizeSourceCrop(layer->sourceCropf);
+    int irect_w = irect.right - irect.left;
+    int irect_h = irect.bottom - irect.top;
+
+    if((disprect.left == irect.left) && (disprect.right == irect.right)) {
+        if((disprect.top == irect.top) && (irect.bottom <= disprect.bottom)) {
+            disprect.top = irect.bottom;
+            srcrect.top += irect_h;
+        }
+        else if((disprect.bottom == irect.bottom)
+                                && (irect.top >= disprect.top)) {
+            disprect.bottom = irect.top;
+            srcrect.bottom -= irect_h;
+        }
+    }
+    else if((disprect.top == irect.top) && (disprect.bottom == irect.bottom)) {
+        if((disprect.left == irect.left) && (irect.right <= disprect.right)) {
+            disprect.left = irect.right;
+            srcrect.left += irect_w;
+        }
+        else if((disprect.right == irect.right)
+                                && (irect.left >= disprect.left)) {
+            disprect.right = irect.left;
+            srcrect.right -= irect_w;
+        }
+    }
+}
+
+void optimizeLayerRects(hwc_context_t *ctx,
+                        const hwc_display_contents_1_t *list, const int& dpy) {
+    int i=list->numHwLayers-2;
+    hwc_rect_t irect;
+    while(i > 0) {
+
+        //see if there is no blending required.
+        //If it is opaque see if we can substract this region from below layers.
+        if(list->hwLayers[i].blending == HWC_BLENDING_NONE) {
+            int j= i-1;
+            hwc_rect_t& topframe =
+                (hwc_rect_t&)list->hwLayers[i].displayFrame;
+            while(j >= 0) {
+                if(!needsScaling(ctx, &list->hwLayers[j], dpy)) {
+                    hwc_rect_t& bottomframe =
+                        (hwc_rect_t&)list->hwLayers[j].displayFrame;
+
+                    hwc_rect_t irect = getIntersection(bottomframe, topframe);
+                    if(isValidRect(irect)) {
+                        //if intersection is valid rect, deduct it
+                        deductRect(&list->hwLayers[j], irect);
+                    }
+                }
+                j--;
+            }
+        }
+        i--;
+    }
+}
+
 void getNonWormholeRegion(hwc_display_contents_1_t* list,
                               hwc_rect_t& nwr)
 {
@@ -858,18 +975,11 @@ void getNonWormholeRegion(hwc_display_contents_1_t* list,
 
     for (uint32_t i = 1; i < last; i++) {
         hwc_rect_t displayFrame = list->hwLayers[i].displayFrame;
-        nwr.left   = min(nwr.left, displayFrame.left);
-        nwr.top    = min(nwr.top, displayFrame.top);
-        nwr.right  = max(nwr.right, displayFrame.right);
-        nwr.bottom = max(nwr.bottom, displayFrame.bottom);
+        nwr = getUnion(nwr, displayFrame);
     }
 
     //Intersect with the framebuffer
-    nwr.left   = max(nwr.left, fbDisplayFrame.left);
-    nwr.top    = max(nwr.top, fbDisplayFrame.top);
-    nwr.right  = min(nwr.right, fbDisplayFrame.right);
-    nwr.bottom = min(nwr.bottom, fbDisplayFrame.bottom);
-
+    nwr = getIntersection(nwr, fbDisplayFrame);
 }
 
 bool isExternalActive(hwc_context_t* ctx) {
@@ -1099,7 +1209,8 @@ void setMdpFlags(hwc_layer_1_t *layer,
 }
 
 inline int configRotator(Rotator *rot, Whf& whf,
-        const eMdpFlags& mdpFlags, const eTransform& orient,
+        const Whf& origWhf, const eMdpFlags& mdpFlags,
+        const eTransform& orient,
         const int& downscale) {
     // Fix alignments for TILED format
     if(whf.format == MDP_Y_CRCB_H2V2_TILE ||
@@ -1107,7 +1218,7 @@ inline int configRotator(Rotator *rot, Whf& whf,
         whf.w =  utils::alignup(whf.w, 64);
         whf.h = utils::alignup(whf.h, 32);
     }
-    rot->setSource(whf);
+    rot->setSource(whf, origWhf);
     rot->setFlags(mdpFlags);
     rot->setTransform(orient);
     rot->setDownscale(downscale);
@@ -1210,13 +1321,13 @@ int configureLowRes(hwc_context_t *ctx, hwc_layer_1_t *layer,
 
     MetaData_t *metadata = (MetaData_t *)hnd->base_metadata;
 
-    hwc_rect_t crop = layer->sourceCrop;
+    hwc_rect_t crop = integerizeSourceCrop(layer->sourceCropf);
     hwc_rect_t dst = layer->displayFrame;
     int transform = layer->transform;
     eTransform orient = static_cast<eTransform>(transform);
     int downscale = 0;
     int rotFlags = ovutils::ROT_FLAGS_NONE;
-    Whf whf(hnd->width, hnd->height,
+    Whf whf(getWidth(hnd), getHeight(hnd),
             getMdpFormat(hnd->format), hnd->size);
 
     if(dpy && isYuvBuffer(hnd)) {
@@ -1239,9 +1350,10 @@ int configureLowRes(hwc_context_t *ctx, hwc_layer_1_t *layer,
                 z = ZORDER_1;
             }
         }
-        calcExtDisplayPosition(ctx, hnd, dpy, crop, dst,
-                                           transform, orient);
     }
+
+    calcExtDisplayPosition(ctx, hnd, dpy, crop, dst,
+                                           transform, orient);
 
     if(isYuvBuffer(hnd) && ctx->mMDP.version >= qdutils::MDP_V4_2 &&
        ctx->mMDP.version < qdutils::MDSS_V5) {
@@ -1262,8 +1374,10 @@ int configureLowRes(hwc_context_t *ctx, hwc_layer_1_t *layer,
             ((transform & HWC_TRANSFORM_ROT_90) || downscale)) {
         *rot = ctx->mRotMgr->getNext();
         if(*rot == NULL) return -1;
+        Whf origWhf(hnd->width, hnd->height,
+                    getMdpFormat(hnd->format), hnd->size);
+        if(configRotator(*rot, whf, origWhf,  mdpFlags, orient, downscale) < 0) {
         //Configure rotator for pre-rotation
-        if(configRotator(*rot, whf, mdpFlags, orient, downscale) < 0){
             ALOGE("%s: configRotator failed!", __FUNCTION__);
             ctx->mOverlay->clear(dpy);
             return -1;
@@ -1304,16 +1418,15 @@ int configureHighRes(hwc_context_t *ctx, hwc_layer_1_t *layer,
 
     int hw_w = ctx->dpyAttr[dpy].xres;
     int hw_h = ctx->dpyAttr[dpy].yres;
-    hwc_rect_t crop = layer->sourceCrop;
+    hwc_rect_t crop = integerizeSourceCrop(layer->sourceCropf);
     hwc_rect_t dst = layer->displayFrame;
     int transform = layer->transform;
     eTransform orient = static_cast<eTransform>(transform);
     const int downscale = 0;
     int rotFlags = ROT_FLAGS_NONE;
 
-    Whf whf(hnd->width, hnd->height,
+    Whf whf(getWidth(hnd), getHeight(hnd),
             getMdpFormat(hnd->format), hnd->size);
-
     if(dpy && isYuvBuffer(hnd)) {
         if(!ctx->listStats[dpy].isDisplayAnimating) {
             ctx->mPrevCropVideo = crop;
@@ -1343,8 +1456,10 @@ int configureHighRes(hwc_context_t *ctx, hwc_layer_1_t *layer,
     if(isYuvBuffer(hnd) && (transform & HWC_TRANSFORM_ROT_90)) {
         (*rot) = ctx->mRotMgr->getNext();
         if((*rot) == NULL) return -1;
+        Whf origWhf(hnd->width, hnd->height,
+                    getMdpFormat(hnd->format), hnd->size);
+        if(configRotator(*rot, whf, origWhf, mdpFlagsL, orient, downscale) < 0) {
         //Configure rotator for pre-rotation
-        if(configRotator(*rot, whf, mdpFlagsL, orient, downscale) < 0){
             ALOGE("%s: configRotator failed!", __FUNCTION__);
             ctx->mOverlay->clear(dpy);
             return -1;

@@ -1,19 +1,19 @@
 #Common headers
-common_includes := hardware/qcom/display/libgralloc
-common_includes += hardware/qcom/display/liboverlay
-common_includes += hardware/qcom/display/libcopybit
-common_includes += hardware/qcom/display/libqdutils
-common_includes += hardware/qcom/display/libhwcomposer
-common_includes += hardware/qcom/display/libexternal
-common_includes += hardware/qcom/display/libqservice
-common_includes += hardware/qcom/display/libvirtual
+common_includes := hardware/qcom/display-caf/libgralloc
+common_includes += hardware/qcom/display-caf/liboverlay
+common_includes += hardware/qcom/display-caf/libcopybit
+common_includes += hardware/qcom/display-caf/libqdutils
+common_includes += hardware/qcom/display-caf/libhwcomposer
+common_includes += hardware/qcom/display-caf/libexternal
+common_includes += hardware/qcom/display-caf/libqservice
+common_includes += hardware/qcom/display-caf/libvirtual
 
 ifeq ($(TARGET_USES_POST_PROCESSING),true)
     common_flags     += -DUSES_POST_PROCESSING
     common_includes += $(TARGET_OUT_HEADERS)/pp/inc
 endif
 
-common_header_export_path := qcom/display
+common_header_export_path := qcom/display-caf
 
 #Common libraries external to display HAL
 common_libs := liblog libutils libcutils libhardware
@@ -44,15 +44,10 @@ kernel_includes :=
 
 # Executed only on QCOM BSPs
 ifeq ($(TARGET_USES_QCOM_BSP),true)
-# On jb_mr2- dont enable QCOM Display features	40
-ifneq ($(call is-platform-sdk-version-at-least,18),true)
-
 # This flag is used to compile out any features that depend on framework changes
     common_flags += -DQCOM_BSP
-    common_flags += -DANDROID_JELLYBEAN_MR1=1	44
 endif
-endif
-ifeq ($(call is-vendor-board-platform,QCOM),true)
+ifneq (,$(filter $(QCOM_BOARD_PLATFORMS),$(TARGET_BOARD_PLATFORM)))
 # This check is to pick the kernel headers from the right location.
 # If the macro above is defined, we make the assumption that we have the kernel
 # available in the build tree.
@@ -60,4 +55,8 @@ ifeq ($(call is-vendor-board-platform,QCOM),true)
 # failing which, they are picked from bionic.
     common_deps += $(TARGET_OUT_INTERMEDIATES)/KERNEL_OBJ/usr
     kernel_includes += $(TARGET_OUT_INTERMEDIATES)/KERNEL_OBJ/usr/include
+endif
+
+ifneq ($(TARGET_DISPLAY_INSECURE_MM_HEAP),true)
+    common_flags += -DSECURE_MM_HEAP
 endif

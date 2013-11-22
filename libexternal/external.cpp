@@ -301,34 +301,37 @@ bool ExternalDisplay::readResolution()
 
     int hdmiEDIDFile = open(sysFsEDIDFilePath, O_RDONLY, 0);
     int len = -1;
+    char edidStr[128] = {'\0'};
 
     if (hdmiEDIDFile < 0) {
         ALOGE("%s: edid_modes file '%s' not found",
                  __FUNCTION__, sysFsEDIDFilePath);
         return false;
     } else {
-        len = read(hdmiEDIDFile, mEDIDs, sizeof(mEDIDs)-1);
+        len = read(hdmiEDIDFile, edidStr, sizeof(edidStr)-1);
         ALOGD_IF(DEBUG, "%s: EDID string: %s length = %d",
-                 __FUNCTION__, mEDIDs, len);
+                 __FUNCTION__, edidStr, len);
         if ( len <= 0) {
             ALOGE("%s: edid_modes file empty '%s'",
                      __FUNCTION__, sysFsEDIDFilePath);
+            edidStr[0] = '\0';
         }
         else {
-            while (len > 1 && isspace(mEDIDs[len-1]))
+            while (len > 1 && isspace(edidStr[len-1])) {
                 --len;
-            mEDIDs[len] = 0;
+            }
+            edidStr[len] = '\0';
         }
     }
     close(hdmiEDIDFile);
     if(len > 0) {
         // Get EDID modes from the EDID strings
-        mModeCount = parseResolution(mEDIDs, mEDIDModes);
+        mModeCount = parseResolution(edidStr, mEDIDModes);
         ALOGD_IF(DEBUG, "%s: mModeCount = %d", __FUNCTION__,
                  mModeCount);
     }
 
-    return (strlen(mEDIDs) > 0);
+    return (len > 0);
 }
 
 bool ExternalDisplay::openFrameBuffer()
@@ -359,7 +362,6 @@ bool ExternalDisplay::closeFrameBuffer()
 void ExternalDisplay::resetInfo()
 {
     memset(&mVInfo, 0, sizeof(mVInfo));
-    memset(mEDIDs, 0, sizeof(mEDIDs));
     memset(mEDIDModes, 0, sizeof(mEDIDModes));
     mModeCount = 0;
     mCurrentMode = -1;
@@ -578,20 +580,25 @@ void ExternalDisplay::setAttributes() {
         mHwcContext->dpyAttr[HWC_DISPLAY_EXTERNAL].mDownScaleMode = false;
         int priW = mHwcContext->dpyAttr[HWC_DISPLAY_PRIMARY].xres;
         int priH = mHwcContext->dpyAttr[HWC_DISPLAY_PRIMARY].yres;
-        // if primary resolution is more than the hdmi resolution
-        // configure dpy attr to primary resolution and set
-        // downscale mode
-        if((priW * priH) > (width * height)) {
-            mHwcContext->dpyAttr[HWC_DISPLAY_EXTERNAL].xres = priW;
-            mHwcContext->dpyAttr[HWC_DISPLAY_EXTERNAL].yres = priH;
-            // HDMI is always in landscape, so always assign the higher
-            // dimension to hdmi's xres
-            if(priH > priW) {
-                mHwcContext->dpyAttr[HWC_DISPLAY_EXTERNAL].xres = priH;
-                mHwcContext->dpyAttr[HWC_DISPLAY_EXTERNAL].yres = priW;
+        // if primary resolution is more than HDMI resolution and
+        // downscale_factor is zero(which corresponds to downscale
+        // to > 50% of orig),then configure dpy attr to primary
+        // resolution and set downscale mode.
+        if(((priW * priH) > (width * height)) &&
+            (priW <= MAX_DISPLAY_DIM )) {
+            int downscale_factor = overlay::utils::getDownscaleFactor(priW, priH, width, height);
+            if(!downscale_factor) {
+                mHwcContext->dpyAttr[HWC_DISPLAY_EXTERNAL].xres = priW;
+                mHwcContext->dpyAttr[HWC_DISPLAY_EXTERNAL].yres = priH;
+                // HDMI is always in landscape, so always assign the higher
+                // dimension to hdmi's xres
+                if(priH > priW) {
+                    mHwcContext->dpyAttr[HWC_DISPLAY_EXTERNAL].xres = priH;
+                    mHwcContext->dpyAttr[HWC_DISPLAY_EXTERNAL].yres = priW;
+                }
+                // Set External Display MDP Downscale mode indicator
+                mHwcContext->dpyAttr[HWC_DISPLAY_EXTERNAL].mDownScaleMode =true;
             }
-            // Set External Display MDP Downscale mode indicator
-            mHwcContext->dpyAttr[HWC_DISPLAY_EXTERNAL].mDownScaleMode =true;
         }
         mHwcContext->dpyAttr[HWC_DISPLAY_EXTERNAL].vsync_period =
                 1000000000l / fps;
