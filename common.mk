@@ -62,6 +62,6 @@ ifneq ($(TARGET_DISPLAY_INSECURE_MM_HEAP),true)
     common_flags += -DSECURE_MM_HEAP
 endif
 
-ifeq ($(TARGET_DISPLAY_USE_RETIRE_FENCE),false)
+ifeq ($(TARGET_DISPLAY_USE_RETIRE_FENCE),true)
     common_flags += -DUSE_RETIRE_FENCE
 endif
