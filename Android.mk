@@ -4,6 +4,7 @@ display-hals += libhwcomposer liboverlay libqdutils libexternal libqservice
 ifneq ($(TARGET_PROVIDES_LIBLIGHT),true)
 display-hals += liblight
 endif
+display-hals += libmemtrack
 
 ifneq (,$(filter $(QCOM_BOARD_PLATFORMS),$(TARGET_BOARD_PLATFORM)))
     include $(call all-named-subdir-makefiles,$(display-hals))
