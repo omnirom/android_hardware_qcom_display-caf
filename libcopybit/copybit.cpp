@@ -127,6 +127,8 @@ static int get_format(int format) {
         case HAL_PIXEL_FORMAT_RGB_888:       return MDP_RGB_888;
         case HAL_PIXEL_FORMAT_RGBA_8888:     return MDP_RGBA_8888;
         case HAL_PIXEL_FORMAT_BGRA_8888:     return MDP_BGRA_8888;
+        case HAL_PIXEL_FORMAT_YCrCb_422_I:   return MDP_YCRYCB_H2V1;
+        case HAL_PIXEL_FORMAT_YCbCr_422_I:   return MDP_YCBYCR_H2V1;
         case HAL_PIXEL_FORMAT_YCrCb_422_SP:  return MDP_Y_CRCB_H2V1;
         case HAL_PIXEL_FORMAT_YCrCb_420_SP:  return MDP_Y_CRCB_H2V2;
         case HAL_PIXEL_FORMAT_YCbCr_422_SP:  return MDP_Y_CBCR_H2V1;
@@ -428,7 +430,7 @@ static int stretch_copybit(
 
         if(src->format ==  HAL_PIXEL_FORMAT_YV12) {
             int usage =
-            GRALLOC_USAGE_PRIVATE_CAMERA_HEAP|GRALLOC_USAGE_PRIVATE_UNCACHED;
+            GRALLOC_USAGE_PRIVATE_ADSP_HEAP|GRALLOC_USAGE_PRIVATE_UNCACHED;
             if (0 == alloc_buffer(&yv12_handle,src->w,src->h,
                                   src->format, usage)){
                 if(0 == convertYV12toYCrCb420SP(src,yv12_handle)){

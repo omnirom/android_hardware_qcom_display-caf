@@ -77,6 +77,10 @@
 #define MDP_OV_PIPE_FORCE_DMA 0x4000
 #endif
 
+#ifndef MDP_SECURE_DISPLAY_OVERLAY_SESSION
+#define MDP_SECURE_DISPLAY_OVERLAY_SESSION 0x00002000
+#endif
+
 #define FB_DEVICE_TEMPLATE "/dev/graphics/fb%u"
 
 namespace overlay {
@@ -256,6 +260,7 @@ enum eMdpFlags {
     OV_MDP_PIPE_FORCE_DMA = MDP_OV_PIPE_FORCE_DMA,
     OV_MDP_DEINTERLACE = MDP_DEINTERLACE,
     OV_MDP_SECURE_OVERLAY_SESSION = MDP_SECURE_OVERLAY_SESSION,
+    OV_MDP_SECURE_DISPLAY_OVERLAY_SESSION = MDP_SECURE_DISPLAY_OVERLAY_SESSION,
     OV_MDP_SOURCE_ROTATED_90 = MDP_SOURCE_ROTATED_90,
     OV_MDP_BACKEND_COMPOSITION = MDP_BACKEND_COMPOSITION,
     OV_MDP_BLEND_FG_PREMULT = MDP_BLEND_FG_PREMULT,
@@ -478,6 +483,8 @@ inline bool isYuv(uint32_t format) {
         case MDP_Y_CR_CB_H2V2:
         case MDP_Y_CR_CB_GH2V2:
         case MDP_Y_CBCR_H2V2_VENUS:
+        case MDP_YCBYCR_H2V1:
+        case MDP_YCRYCB_H2V1:
             return true;
         default:
             return false;
@@ -507,6 +514,7 @@ inline const char* getFormatString(int format){
         "MDP_ARGB_8888",
         "MDP_RGB_888",
         "MDP_Y_CRCB_H2V2",
+        "MDP_YCBYCR_H2V1",
         "MDP_YCRYCB_H2V1",
         "MDP_Y_CRCB_H2V1",
         "MDP_Y_CBCR_H2V1",

@@ -114,6 +114,10 @@ int getMdpFormat(int format) {
             return MDP_Y_CBCR_H2V2;
         case HAL_PIXEL_FORMAT_YCrCb_422_SP:
             return MDP_Y_CRCB_H2V1;
+        case HAL_PIXEL_FORMAT_YCbCr_422_I:
+            return MDP_YCBYCR_H2V1;
+        case HAL_PIXEL_FORMAT_YCrCb_422_I:
+            return MDP_YCRYCB_H2V1;
         case HAL_PIXEL_FORMAT_YCbCr_444_SP:
             return MDP_Y_CBCR_H1V1;
         case HAL_PIXEL_FORMAT_YCrCb_444_SP:
@@ -166,7 +170,11 @@ int getHALFormat(int mdpFormat) {
             return HAL_PIXEL_FORMAT_YCbCr_420_SP;
         case MDP_Y_CRCB_H2V1:
             return HAL_PIXEL_FORMAT_YCrCb_422_SP;
-        case MDP_Y_CBCR_H1V1:
+        case MDP_YCBYCR_H2V1:
+            return HAL_PIXEL_FORMAT_YCbCr_422_I;
+        case MDP_YCRYCB_H2V1:
+            return HAL_PIXEL_FORMAT_YCrCb_422_I;
+         case MDP_Y_CBCR_H1V1:
             return HAL_PIXEL_FORMAT_YCbCr_444_SP;
         case MDP_Y_CRCB_H1V1:
             return HAL_PIXEL_FORMAT_YCrCb_444_SP;
@@ -183,6 +191,9 @@ int getHALFormat(int mdpFormat) {
 int getDownscaleFactor(const int& src_w, const int& src_h,
         const int& dst_w, const int& dst_h) {
     int dscale_factor = utils::ROT_DS_NONE;
+    // The tolerance is an empirical grey area that needs to be adjusted
+    // manually so that we always err on the side of caution
+    float fDscaleTolerance = 0.05;
     // We need this check to engage the rotator whenever possible to assist MDP
     // in performing video downscale.
     // This saves bandwidth and avoids causing the driver to make too many panel
@@ -190,14 +201,15 @@ int getDownscaleFactor(const int& src_w, const int& src_h,
     // Use-case: Video playback [with downscaling and rotation].
     if (dst_w && dst_h)
     {
-        float fDscale =  (float)(src_w * src_h) / (float)(dst_w * dst_h);
+        float fDscale =  sqrtf((float)(src_w * src_h) / (float)(dst_w * dst_h)) +
+                         fDscaleTolerance;
 
         // On our MTP 1080p playback case downscale after sqrt is coming to 1.87
         // we were rounding to 1. So entirely MDP has to do the downscaling.
         // BW requirement and clock requirement is high across MDP4 targets.
         // It is unable to downscale 1080p video to panel resolution on 8960.
         // round(x) will round it to nearest integer and avoids above issue.
-        uint32_t dscale = round(sqrtf(fDscale));
+        uint32_t dscale = round(fDscale);
 
         if(dscale < 2) {
             // Down-scale to > 50% of orig.

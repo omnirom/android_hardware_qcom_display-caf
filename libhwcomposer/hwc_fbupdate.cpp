@@ -24,8 +24,10 @@
 #include <overlayRotator.h>
 #include "hwc_fbupdate.h"
 #include "external.h"
+#include "virtual.h"
 
 using overlay::Rotator;
+using namespace overlay::utils;
 
 namespace qhwc {
 
@@ -49,6 +51,30 @@ FBUpdateLowRes::FBUpdateLowRes(const int& dpy): IFBUpdate(dpy) {}
 inline void FBUpdateLowRes::reset() {
     IFBUpdate::reset();
     mDest = ovutils::OV_INVALID;
+}
+
+bool FBUpdateLowRes::preRotateExtDisplay(hwc_context_t *ctx,
+                                            ovutils::Whf &info,
+                                            hwc_rect_t& sourceCrop,
+                                            ovutils::eMdpFlags& mdpFlags,
+                                            int& rotFlags)
+{
+    int extOrient = getExtOrientation(ctx);
+    ovutils::eTransform orient = static_cast<ovutils::eTransform >(extOrient);
+    if(mDpy && (extOrient & HWC_TRANSFORM_ROT_90)) {
+        mRot = ctx->mRotMgr->getNext();
+        if(mRot == NULL) return false;
+        //Configure rotator for pre-rotation
+        if(configRotator(mRot, info, mdpFlags, orient, 0) < 0) {
+            ALOGE("%s: configRotator Failed!", __FUNCTION__);
+            mRot = NULL;
+            return false;
+        }
+        info.format = (mRot)->getDstFormat();
+        updateSource(orient, info, sourceCrop);
+        rotFlags |= ovutils::ROT_PREROTATED;
+    }
+    return true;
 }
 
 bool FBUpdateLowRes::prepare(hwc_context_t *ctx, hwc_display_contents_1 *list,
@@ -76,7 +102,7 @@ bool FBUpdateLowRes::configure(hwc_context_t *ctx, hwc_display_contents_1 *list,
         }
         overlay::Overlay& ov = *(ctx->mOverlay);
         private_handle_t *hnd = (private_handle_t *)layer->handle;
-        ovutils::Whf info(hnd->width, hnd->height,
+        ovutils::Whf info(getWidth(hnd), getHeight(hnd),
                           ovutils::getMdpFormat(hnd->format), hnd->size);
 
         //Request a pipe
@@ -105,43 +131,31 @@ bool FBUpdateLowRes::configure(hwc_context_t *ctx, hwc_display_contents_1 *list,
 
         ovutils::eTransform orient =
                     static_cast<ovutils::eTransform>(transform);
+        // use ext orientation if any
+        int extOrient = getExtOrientation(ctx);
 
         // Do not use getNonWormholeRegion() function to calculate the
         // sourceCrop during animation on external display and
         // Dont do wormhole calculation when extorientation is set on External
+        // Dont do wormhole calculation when extDownscale is enabled on External
         if(ctx->listStats[mDpy].isDisplayAnimating && mDpy) {
             sourceCrop = layer->displayFrame;
             displayFrame = sourceCrop;
-        } else if((!mDpy || (mDpy && !ctx->mExtOrientation))
-                               && extOnlyLayerIndex == -1) {
-            getNonWormholeRegion(list, sourceCrop);
-            displayFrame = sourceCrop;
+        } else if((!mDpy ||
+                   (mDpy && !extOrient
+                   && !ctx->dpyAttr[mDpy].mDownScaleMode))
+                   && (extOnlyLayerIndex == -1)) {
+                getNonWormholeRegion(list, sourceCrop);
+                displayFrame = sourceCrop;
         }
-
-        if(mDpy) {
-            if(ctx->mExtOrientation) {
-                calcExtDisplayPosition(ctx, mDpy, displayFrame);
-                // If there is a external orientation set, use that
-                transform = ctx->mExtOrientation;
-                orient = static_cast<ovutils::eTransform >(ctx->mExtOrientation);
-            }
-            // Calculate the actionsafe dimensions for External(dpy = 1 or 2)
-            getActionSafePosition(ctx, mDpy, displayFrame);
-       }
+        calcExtDisplayPosition(ctx, hnd, mDpy, sourceCrop, displayFrame,
+                                   transform, orient);
         setMdpFlags(layer, mdpFlags, 0, transform);
         // For External use rotator if there is a rotation value set
-        if(mDpy && (ctx->mExtOrientation & HWC_TRANSFORM_ROT_90)) {
-            mRot = ctx->mRotMgr->getNext();
-            if(mRot == NULL) return -1;
-            //Configure rotator for pre-rotation
-            if(configRotator(mRot, info, mdpFlags, orient, 0) < 0) {
-                ALOGE("%s: configRotator Failed!", __FUNCTION__);
-                mRot = NULL;
-                return -1;
-            }
-            info.format = (mRot)->getDstFormat();
-            updateSource(orient, info, sourceCrop);
-            rotFlags |= ovutils::ROT_PREROTATED;
+        ret = preRotateExtDisplay(ctx, info, sourceCrop, mdpFlags, rotFlags);
+        if(!ret) {
+            ALOGE("%s: preRotate for external Failed!", __FUNCTION__);
+            return false;
         }
         //For the mdp, since either we are pre-rotating or MDP does flips
         orient = ovutils::OVERLAY_TRANSFORM_0;
@@ -226,7 +240,7 @@ bool FBUpdateHighRes::configure(hwc_context_t *ctx,
         }
         overlay::Overlay& ov = *(ctx->mOverlay);
         private_handle_t *hnd = (private_handle_t *)layer->handle;
-        ovutils::Whf info(hnd->width, hnd->height,
+        ovutils::Whf info(getWidth(hnd), getHeight(hnd),
                           ovutils::getMdpFormat(hnd->format), hnd->size);
 
         //Request left pipe

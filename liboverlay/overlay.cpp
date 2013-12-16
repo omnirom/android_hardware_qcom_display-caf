@@ -38,7 +38,13 @@ namespace overlay {
 using namespace utils;
 
 Overlay::Overlay() {
-    PipeBook::NUM_PIPES = qdutils::MDPVersion::getInstance().getTotalPipes();
+    char property[PROPERTY_VALUE_MAX];
+    if (property_get("debug.mdpcomp.maxlayer", property, NULL) > 0) {
+        PipeBook::NUM_PIPES = atoi(property);
+    } else {
+        PipeBook::NUM_PIPES = qdutils::MDPVersion::getInstance().getTotalPipes();
+    }
+
     for(int i = 0; i < PipeBook::NUM_PIPES; i++) {
         mPipeBook[i].init();
     }
@@ -257,12 +263,15 @@ int Overlay::initOverlay() {
                 ALOGD("ndx=%d num=%d z_order=%d", minfo->pndx, minfo->pnum,
                       minfo->z_order);
                 // clear any pipe connected to mixer including base pipe.
-                int index = minfo->pndx;
-                ALOGD("Unset overlay with index: %d at mixer %d", index, i);
-                if(ioctl(fd, MSMFB_OVERLAY_UNSET, &index) == -1) {
-                    ALOGE("ERROR: MSMFB_OVERLAY_UNSET failed");
-                    close(fd);
-                    return -1;
+                if (qdutils::MDPVersion::getInstance().getMDPVersion() >= qdutils::MDP_V4_2 ||
+                        (minfo->z_order) != -1) {
+                    int index = minfo->pndx;
+                    ALOGD("Unset overlay with index: %d at mixer %d", index, i);
+                    if(ioctl(fd, MSMFB_OVERLAY_UNSET, &index) == -1) {
+                        ALOGE("ERROR: MSMFB_OVERLAY_UNSET failed");
+                        close(fd);
+                        return -1;
+                    }
                 }
                 minfo++;
             }
