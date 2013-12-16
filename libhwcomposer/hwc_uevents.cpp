@@ -49,7 +49,7 @@ enum {
 static void setup(hwc_context_t* ctx, int dpy)
 {
     ctx->mFBUpdate[dpy] =
-        IFBUpdate::getObject(ctx->dpyAttr[dpy].xres, dpy);
+        IFBUpdate::getObject(ctx, ctx->dpyAttr[dpy].xres, dpy);
     ctx->mMDPComp[dpy] =
         MDPComp::getObject(ctx->dpyAttr[dpy].xres, dpy);
     int compositionType =
@@ -57,7 +57,7 @@ static void setup(hwc_context_t* ctx, int dpy)
     if (compositionType & (qdutils::COMPOSITION_TYPE_DYN |
                            qdutils::COMPOSITION_TYPE_MDP |
                            qdutils::COMPOSITION_TYPE_C2D)) {
-        ctx->mCopyBit[dpy] = new CopyBit();
+        ctx->mCopyBit[dpy] = new CopyBit(ctx, dpy);
     }
 }
 
@@ -87,6 +87,24 @@ static int getConnectedDisplay(const char* strUdata)
     return -1;
 }
 
+static bool getPanelResetStatus(hwc_context_t* ctx, const char* strUdata, int len)
+{
+    const char* iter_str = strUdata;
+    if (strcasestr("change@/devices/virtual/graphics/fb0", strUdata)) {
+        while(((iter_str - strUdata) <= len) && (*iter_str)) {
+            char* pstr = strstr(iter_str, "PANEL_ALIVE=0");
+            if (pstr != NULL) {
+                ALOGE("%s: got change event in fb0 with PANEL_ALIVE=0",
+                                                           __FUNCTION__);
+                ctx->mPanelResetStatus = true;
+                return true;
+            }
+            iter_str += strlen(iter_str)+1;
+        }
+    }
+    return false;
+}
+
 /* Parse uevent data for action requested for the display */
 static int getConnectedState(const char* strUdata, int len)
 {
@@ -103,6 +121,11 @@ static int getConnectedState(const char* strUdata, int len)
 
 static void handle_uevent(hwc_context_t* ctx, const char* udata, int len)
 {
+    bool bpanelReset = getPanelResetStatus(ctx, udata, len);
+    if (bpanelReset) {
+        return;
+    }
+
     int dpy = getConnectedDisplay(udata);
     if(dpy < 0) {
         ALOGD_IF(UEVENT_DEBUG, "%s: Not disp Event ", __FUNCTION__);
@@ -124,25 +147,42 @@ static void handle_uevent(hwc_context_t* ctx, const char* udata, int len)
                 break;
             }
 
-            Locker::Autolock _l(ctx->mDrawLock);
-            clear(ctx, dpy);
-            ctx->dpyAttr[dpy].connected = false;
-            ctx->dpyAttr[dpy].isActive = false;
+            {
+                Locker::Autolock _l(ctx->mDrawLock);
+                clear(ctx, dpy);
+                ctx->dpyAttr[dpy].connected = false;
+                ctx->dpyAttr[dpy].isActive = false;
 
-            if(dpy == HWC_DISPLAY_EXTERNAL) {
-                ctx->mExtDisplay->teardown();
-            } else {
-                ctx->mVirtualDisplay->teardown();
+                /* We need to send hotplug to SF only when we are disconnecting
+                 * (1) HDMI OR (2) proprietary WFD session */
+                if(dpy == HWC_DISPLAY_EXTERNAL ||
+                        ctx->mVirtualonExtActive) {
+                    ALOGE_IF(UEVENT_DEBUG,"%s:Sending EXTERNAL OFFLINE hotplug"
+                            "event", __FUNCTION__);
+                    ctx->proc->hotplug(ctx->proc, HWC_DISPLAY_EXTERNAL,
+                            EXTERNAL_OFFLINE);
+                    ctx->mVirtualonExtActive = false;
+                }
+                ctx->proc->invalidate(ctx->proc);
             }
 
-            /* We need to send hotplug to SF only when we are disconnecting
-             * (1) HDMI OR (2) proprietary WFD session */
-            if(dpy == HWC_DISPLAY_EXTERNAL ||
-               ctx->mVirtualonExtActive) {
-                ALOGE_IF(UEVENT_DEBUG,"%s:Sending EXTERNAL OFFLINE hotplug"
-                         "event", __FUNCTION__);
-                ctx->proc->hotplug(ctx->proc, HWC_DISPLAY_EXTERNAL,
-                                   EXTERNAL_OFFLINE);
+            usleep(ctx->dpyAttr[HWC_DISPLAY_PRIMARY].vsync_period
+                    * 2 / 1000);
+            // At this point all the pipes used by External have been
+            // marked as UNSET.
+            {
+                Locker::Autolock _l(ctx->mDrawLock);
+                // Perform commit to unstage the pipes.
+                if (!Overlay::displayCommit(ctx->dpyAttr[dpy].fd)) {
+                    ALOGE("%s: display commit fail! for %d dpy",
+                            __FUNCTION__, dpy);
+                }
+
+                if(dpy == HWC_DISPLAY_EXTERNAL) {
+                    ctx->mExtDisplay->teardown();
+                } else {
+                    ctx->mVirtualDisplay->teardown();
+                }
             }
             break;
         }
@@ -180,26 +220,33 @@ static void handle_uevent(hwc_context_t* ctx, const char* udata, int len)
                         clear(ctx, HWC_DISPLAY_VIRTUAL);
                         ctx->dpyAttr[HWC_DISPLAY_VIRTUAL].connected = false;
                         ctx->dpyAttr[HWC_DISPLAY_VIRTUAL].isActive = false;
+
+                        /* Need to send hotplug only when connected WFD in
+                         * proprietary path */
+                        if(ctx->mVirtualonExtActive) {
+                            ALOGE_IF(UEVENT_DEBUG,"%s: Sending EXTERNAL OFFLINE"
+                                    "hotplug event", __FUNCTION__);
+                            ctx->proc->hotplug(ctx->proc, HWC_DISPLAY_EXTERNAL,
+                                    EXTERNAL_OFFLINE);
+                            ctx->mVirtualonExtActive = false;
+                        }
+                        ctx->proc->invalidate(ctx->proc);
+                    }
+
+                    usleep(ctx->dpyAttr[HWC_DISPLAY_PRIMARY].vsync_period
+                            * 2 / 1000);
+                    // At this point all the pipes used by External have been
+                    // marked as UNSET.
+                    {
+                        Locker::Autolock _l(ctx->mDrawLock);
+                        // Perform commit to unstage the pipes.
+                        if (!Overlay::displayCommit(ctx->dpyAttr[dpy].fd)) {
+                            ALOGE("%s: display commit fail! for %d dpy",
+                                    __FUNCTION__, dpy);
+                        }
                     }
 
                     ctx->mVirtualDisplay->teardown();
-
-                    /* Need to send hotplug only when connected WFD in
-                     * proprietary path */
-                    if(ctx->mVirtualonExtActive) {
-                        ALOGE_IF(UEVENT_DEBUG,"%s: Sending EXTERNAL OFFLINE"
-                                 "hotplug event", __FUNCTION__);
-                        ctx->proc->hotplug(ctx->proc, HWC_DISPLAY_EXTERNAL,
-                                           EXTERNAL_OFFLINE);
-                        {
-                            Locker::Autolock _l(ctx->mDrawLock);
-                            ctx->mVirtualonExtActive = false;
-                        }
-                    }
-                    /* Wait for few frames for SF to tear down
-                     * the WFD session. */
-                    usleep(ctx->dpyAttr[HWC_DISPLAY_PRIMARY].vsync_period
-                           * 2 / 1000);
                 }
                 ctx->mExtDisplay->configure();
             } else {
@@ -225,25 +272,33 @@ static void handle_uevent(hwc_context_t* ctx, const char* udata, int len)
             ctx->dpyAttr[dpy].connected = true;
             ctx->dpyAttr[dpy].isConfiguring = true;
 
-            if(dpy == HWC_DISPLAY_VIRTUAL) {
+            if(dpy == HWC_DISPLAY_EXTERNAL ||
+               ctx->mVirtualonExtActive) {
+                /* External display is HDMI or non-hybrid WFD solution */
+                ALOGE_IF(UEVENT_DEBUG, "%s: Sending EXTERNAL_OFFLINE ONLINE"
+                         "hotplug event", __FUNCTION__);
+                ctx->proc->hotplug(ctx->proc,HWC_DISPLAY_EXTERNAL,
+                                   EXTERNAL_ONLINE);
+            } else {
                 /* We wont be getting unblank for VIRTUAL DISPLAY and its
                  * always guaranteed from WFD stack that CONNECT uevent for
                  * VIRTUAL DISPLAY will be triggered before creating
                  * surface for the same. */
                 ctx->dpyAttr[HWC_DISPLAY_VIRTUAL].isActive = true;
             }
-            if(dpy == HWC_DISPLAY_EXTERNAL ||
-               ctx->mVirtualonExtActive) {
-                ALOGE_IF(UEVENT_DEBUG, "%s: Sending EXTERNAL_OFFLINE ONLINE"
-                         "hotplug event", __FUNCTION__);
-                ctx->proc->hotplug(ctx->proc,HWC_DISPLAY_EXTERNAL,
-                                   EXTERNAL_ONLINE);
-            }
             break;
         }
         case EXTERNAL_PAUSE:
             {   // pause case
-                ALOGD("%s Received Pause event",__FUNCTION__);
+
+                 ALOGD("%s Received Pause event",__FUNCTION__);
+                 /* Display already in pause */
+                 if(ctx->dpyAttr[dpy].isPause) {
+                    ALOGE_IF(UEVENT_DEBUG,"%s: Ignoring EXTERNAL_PAUSE event"
+                             "for display: %d", __FUNCTION__, dpy);
+                    break;
+                 }
+
                  {
                      Locker::Autolock _l(ctx->mDrawLock);
                      ctx->dpyAttr[dpy].isActive = true;
@@ -266,7 +321,16 @@ static void handle_uevent(hwc_context_t* ctx, const char* udata, int len)
             }
         case EXTERNAL_RESUME:
             {  // resume case
+
                 ALOGD("%s Received resume event",__FUNCTION__);
+
+                /* Display already is resumed */
+                if(not ctx->dpyAttr[dpy].isPause) {
+                    ALOGE_IF(UEVENT_DEBUG,"%s: Ignoring EXTERNAL_RESUME event"
+                             "for display: %d", __FUNCTION__, dpy);
+                    break;
+                }
+
                 //Treat Resume as Online event
                 //Since external didnt have any pipes, force primary to give up
                 //its pipes; we don't allow inter-mixer pipe transfers.
@@ -302,7 +366,10 @@ static void *uevent_loop(void *param)
     char thread_name[64] = HWC_UEVENT_THREAD_NAME;
     prctl(PR_SET_NAME, (unsigned long) &thread_name, 0, 0, 0);
     setpriority(PRIO_PROCESS, 0, HAL_PRIORITY_URGENT_DISPLAY);
-    uevent_init();
+    if(!uevent_init()) {
+        ALOGE("%s: failed to init uevent ",__FUNCTION__);
+        return NULL;
+    }
 
     while(1) {
         len = uevent_next_event(udata, sizeof(udata) - 2);

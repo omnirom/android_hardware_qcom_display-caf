@@ -35,6 +35,7 @@
 
 int setMetaData(private_handle_t *handle, DispParamType paramType,
                                                     void *param) {
+#ifdef QCOM_BSP
     if (!handle) {
         ALOGE("%s: Private handle is null!", __func__);
         return -1;
@@ -75,6 +76,9 @@ int setMetaData(private_handle_t *handle, DispParamType paramType,
         case PP_PARAM_SHARP2:
             memcpy((void *)&data->Sharp2Data, param, sizeof(Sharp2Data_t));
             break;
+        case UPDATE_BUFFER_GEOMETRY:
+            memcpy((void *)&data->bufferDim, param, sizeof(BufferDim_t));
+            break;
         default:
             ALOGE("Unknown paramType %d", paramType);
             break;
@@ -82,5 +86,6 @@ int setMetaData(private_handle_t *handle, DispParamType paramType,
     if(munmap(base, size))
         ALOGE("%s: failed to unmap ptr 0x%x, err %d", __func__, (int)base,
                                                                         errno);
+#endif
     return 0;
 }

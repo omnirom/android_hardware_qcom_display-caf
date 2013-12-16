@@ -23,6 +23,7 @@
 
 #define HWC_REMOVE_DEPRECATED_VERSIONS 1
 #include <fcntl.h>
+#include <math.h>
 #include <hardware/hwcomposer.h>
 #include <gr.h>
 #include <gralloc_priv.h>
@@ -30,6 +31,7 @@
 #include <linux/fb.h>
 #include "qdMetaData.h"
 #include <overlayUtils.h>
+#include <cutils/sockets.h>
 
 #define ALIGN_TO(x, align)     (((x) + ((align)-1)) & ~((align)-1))
 #define LIKELY( exp )       (__builtin_expect( (exp) != 0, true  ))
@@ -37,6 +39,7 @@
 #define MAX_NUM_APP_LAYERS 32
 #define MAX_DISPLAY_DIM 2048
 
+#define DAEMON_SOCKET "pps"
 //Fwrd decls
 struct hwc_context_t;
 
@@ -83,6 +86,8 @@ struct DisplayAttributes {
     // To trigger padding round to clean up mdp
     // pipes
     bool isConfiguring;
+    // External Display is in MDP Downscale mode indicator
+    bool mDownScaleMode;
 };
 
 struct ListStats {
@@ -99,6 +104,7 @@ struct ListStats {
     // Notifies hwcomposer about the start and end of animation
     // This will be set to true during animation, otherwise false.
     bool isDisplayAnimating;
+    bool secureUI; // Secure display layer
 };
 
 struct LayerProp {
@@ -109,6 +115,14 @@ struct LayerProp {
 struct VsyncState {
     bool enable;
     bool fakevsync;
+};
+
+struct CablProp {
+    bool enabled;
+    bool start;
+    bool videoOnly;
+    //daemon_socket for connection to pp-daemon
+    int daemon_socket;
 };
 
 // LayerProp::flag values
@@ -147,6 +161,25 @@ inline overlay::Rotator* LayerRotMap::getRot(uint32_t index) const {
     return mRot[index];
 }
 
+inline hwc_rect_t integerizeSourceCrop(const hwc_frect_t& cropF) {
+    hwc_rect_t cropI = {0};
+    cropI.left = int(ceilf(cropF.left));
+    cropI.top = int(ceilf(cropF.top));
+    cropI.right = int(floorf(cropF.right));
+    cropI.bottom = int(floorf(cropF.bottom));
+    return cropI;
+}
+
+inline bool isNonIntegralSourceCrop(const hwc_frect_t& cropF) {
+    if(cropF.left - roundf(cropF.left)     ||
+       cropF.top - roundf(cropF.top)       ||
+       cropF.right - roundf(cropF.right)   ||
+       cropF.bottom - roundf(cropF.bottom))
+        return true;
+    else
+        return false;
+}
+
 // -----------------------------------------------------------------------------
 // Utility functions - implemented in hwc_utils.cpp
 void dumpLayer(hwc_layer_1_t const* l);
@@ -171,6 +204,15 @@ int getBlending(int blending);
 //Helper function to dump logs
 void dumpsys_log(android::String8& buf, const char* fmt, ...);
 
+int getExtOrientation(hwc_context_t* ctx);
+
+bool isValidRect(const hwc_rect_t& rect);
+void deductRect(const hwc_layer_1_t* layer, hwc_rect_t& irect);
+hwc_rect_t getIntersection(const hwc_rect_t& rect1, const hwc_rect_t& rect2);
+hwc_rect_t getUnion(const hwc_rect_t& rect1, const hwc_rect_t& rect2);
+void optimizeLayerRects(hwc_context_t *ctx,
+                        const hwc_display_contents_1_t *list, const int& dpy);
+
 /* Calculates the destination position based on the action safe rectangle */
 void getActionSafePosition(hwc_context_t *ctx, int dpy, hwc_rect_t& dst);
 
@@ -182,8 +224,19 @@ void getAspectRatioPosition(hwc_context_t* ctx, int dpy, int extOrientation,
 
 bool isPrimaryPortrait(hwc_context_t *ctx);
 
+bool isOrientationPortrait(hwc_context_t *ctx);
+
 void calcExtDisplayPosition(hwc_context_t *ctx,
-                               int dpy, hwc_rect_t& displayFrame);
+                               private_handle_t *hnd,
+                               int dpy,
+                               hwc_rect_t& sourceCrop,
+                               hwc_rect_t& displayFrame,
+                               int& transform,
+                               ovutils::eTransform& orient);
+
+// Returns the orientation that needs to be set on external for
+// BufferMirrirMode(Sidesync)
+int getMirrorModeOrientation(hwc_context_t *ctx);
 
 //Close acquireFenceFds of all layers of incoming list
 void closeAcquireFds(hwc_display_contents_1_t* list);
@@ -202,7 +255,7 @@ void setMdpFlags(hwc_layer_1_t *layer,
         int rotDownscale, int transform);
 
 int configRotator(overlay::Rotator *rot, ovutils::Whf& whf,
-        const ovutils::eMdpFlags& mdpFlags,
+        const ovutils::Whf& origWhf, const ovutils::eMdpFlags& mdpFlags,
         const ovutils::eTransform& orient, const int& downscale);
 
 int configMdp(overlay::Overlay *ov, const ovutils::PipeArgs& parg,
@@ -257,6 +310,31 @@ static inline bool isExtBlock(const private_handle_t* hnd) {
 //Return true if buffer is for external display only with a Close Caption flag.
 static inline bool isExtCC(const private_handle_t* hnd) {
     return (hnd && (hnd->flags & private_handle_t::PRIV_FLAGS_EXTERNAL_CC));
+}
+
+static inline int getWidth(const private_handle_t* hnd) {
+    if(isYuvBuffer(hnd)) {
+        MetaData_t *metadata = (MetaData_t *)hnd->base_metadata;
+        if(metadata && metadata->operation & UPDATE_BUFFER_GEOMETRY) {
+            return metadata->bufferDim.sliceWidth;
+        }
+    }
+    return hnd->width;
+}
+
+static inline int getHeight(const private_handle_t* hnd) {
+    if(isYuvBuffer(hnd)) {
+        MetaData_t *metadata = (MetaData_t *)hnd->base_metadata;
+        if(metadata && metadata->operation & UPDATE_BUFFER_GEOMETRY) {
+            return metadata->bufferDim.sliceHeight;
+        }
+    }
+    return hnd->height;
+}
+
+//Return true if the buffer is intended for Secure Display
+static inline bool isSecureDisplayBuffer(const private_handle_t* hnd) {
+    return (hnd && (hnd->flags & private_handle_t::PRIV_FLAGS_SECURE_DISPLAY));
 }
 
 template<typename T> inline T max(T a, T b) { return (a > b) ? a : b; }
@@ -319,6 +397,8 @@ struct hwc_context_t {
     qhwc::ListStats listStats[HWC_NUM_DISPLAY_TYPES];
     qhwc::LayerProp *layerProp[HWC_NUM_DISPLAY_TYPES];
     qhwc::MDPComp *mMDPComp[HWC_NUM_DISPLAY_TYPES];
+    qhwc::CablProp mCablProp;
+    overlay::utils::Whf mPrevWHF[HWC_NUM_DISPLAY_TYPES];
 
     // No animation on External display feature
     // Notifies hwcomposer about the device orientation before animation.
@@ -343,7 +423,14 @@ struct hwc_context_t {
     mutable Locker mDrawLock;
     // External Orientation
     int mExtOrientation;
+    //Used for SideSync feature
+    //which overrides the mExtOrientation
+    bool mBufferMirrorMode;
+
     qhwc::LayerRotMap *mLayerRotMap[HWC_NUM_DISPLAY_TYPES];
+
+    // Panel reset flag will be set if BTA check fails
+    bool mPanelResetStatus;
 };
 
 namespace qhwc {
@@ -354,6 +441,11 @@ static inline bool isSkipPresent (hwc_context_t *ctx, int dpy) {
 static inline bool isYuvPresent (hwc_context_t *ctx, int dpy) {
     return  ctx->listStats[dpy].yuvCount;
 }
+
+static inline bool has90Transform(hwc_layer_1_t *layer) {
+    return (layer->transform & HWC_TRANSFORM_ROT_90);
+}
+
 };
 
 #endif //HWC_UTILS_H
