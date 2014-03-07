@@ -263,6 +263,9 @@ int configMdp(overlay::Overlay *ov, const ovutils::PipeArgs& parg,
 void updateSource(ovutils::eTransform& orient, ovutils::Whf& whf,
         hwc_rect_t& crop);
 
+bool needToForceRotator(hwc_context_t *ctx, const int& dpy,
+         uint32_t w, uint32_t h);
+
 //Routine to configure low resolution panels (<= 2048 width)
 int configureLowRes(hwc_context_t *ctx, hwc_layer_1_t *layer, const int& dpy,
         ovutils::eMdpFlags& mdpFlags, ovutils::eZorder& z,
@@ -289,6 +292,12 @@ static inline bool isYuvBuffer(const private_handle_t* hnd) {
 static inline bool isSecureBuffer(const private_handle_t* hnd) {
     return (hnd && (private_handle_t::PRIV_FLAGS_SECURE_BUFFER & hnd->flags));
 }
+
+// Returns true if the buffer is non contiguous
+static inline bool isNonContigBuffer(const private_handle_t* hnd) {
+    return (hnd && (private_handle_t::PRIV_FLAGS_NONCONTIGUOUS_MEM & hnd->flags));
+}
+
 //Return true if buffer is marked locked
 static inline bool isBufferLocked(const private_handle_t* hnd) {
     return (hnd && (private_handle_t::PRIV_FLAGS_HWC_LOCK & hnd->flags));
@@ -397,6 +406,10 @@ struct hwc_context_t {
     qhwc::HwcDebug *mHwcDebug[HWC_NUM_DISPLAY_TYPES];
     hwc_rect_t mViewFrame[HWC_NUM_DISPLAY_TYPES];
 
+    // stores the #numHwLayers of the previous frame
+    // for each display device
+    int mPrevHwLayerCount[HWC_NUM_DISPLAY_TYPES];
+
     // No animation on External display feature
     // Notifies hwcomposer about the device orientation before animation.
     int deviceOrientation;
@@ -418,6 +431,8 @@ struct hwc_context_t {
     bool mBasePipeSetup;
     //Lock to protect drawing data structures
     mutable Locker mDrawLock;
+    //Drawing round when we use GPU
+    bool isPaddingRound;
     // External Orientation
     int mExtOrientation;
     //Used for SideSync feature
