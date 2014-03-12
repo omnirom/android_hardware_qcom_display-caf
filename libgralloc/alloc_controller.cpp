@@ -212,7 +212,7 @@ int IonController::allocate(alloc_data& data, int usage)
     if(usage & GRALLOC_USAGE_PRIVATE_IOMMU_HEAP) {
         ionFlags |= ION_HEAP(ION_IOMMU_HEAP_ID);
 #ifndef SECURE_MM_HEAP
-        noncontig = true;
+        nonContig = true;
 #endif
     }
 
@@ -249,7 +249,7 @@ int IonController::allocate(alloc_data& data, int usage)
     if(ionFlags & ION_SECURE)
         data.allocType |= private_handle_t::PRIV_FLAGS_SECURE_BUFFER;
 #else
-    if (usage & GRALLOC_USAGE_PROTECTED && !noncontig)
+    if (usage & GRALLOC_USAGE_PROTECTED && !nonContig)
         data.allocType |= ION_SECURE;
 #endif
 
