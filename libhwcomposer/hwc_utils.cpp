@@ -1063,9 +1063,9 @@ int hwc_sync(hwc_context_t *ctx, hwc_display_contents_1_t* list, int dpy,
 
     //Accumulate acquireFenceFds for MDP
     for(uint32_t i = 0; i < list->numHwLayers; i++) {
-        if(((list->hwLayers[i].compositionType == HWC_OVERLAY &&
-                        (layerProp[i].mFlags & HWC_MDPCOMP)) ||
-                        list->hwLayers[i].compositionType == HWC_BLIT) &&
+        if(((list->hwLayers[i].compositionType == HWC_OVERLAY ||
+            list->hwLayers[i].compositionType == HWC_BLIT) &&
+                        (layerProp[i].mFlags & HWC_MDPCOMP)) &&
                         list->hwLayers[i].acquireFenceFd >= 0) {
             if(UNLIKELY(swapzero))
                 acquireFd[count++] = -1;
