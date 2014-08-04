@@ -30,10 +30,13 @@
 #include <cutils/log.h>
 #include <fcntl.h>
 #include <dlfcn.h>
-#include "gralloc_priv.h"
+#include <gralloc_priv.h>
 #include "alloc_controller.h"
 #include "memalloc.h"
 #include "ionalloc.h"
+#ifdef USE_PMEM_ADSP
+#include "pmemalloc.h"
+#endif
 #include "gr.h"
 #include "comptype.h"
 
@@ -180,6 +183,9 @@ IAllocController* IAllocController::getInstance(void)
 IonController::IonController()
 {
     mIonAlloc = new IonAlloc();
+#ifdef USE_PMEM_ADSP
+    mPmemAlloc = new PmemAdspAlloc();
+#endif
     mUseTZProtection = false;
     char property[PROPERTY_VALUE_MAX];
     if ((property_get("persist.gralloc.cp.level3", property, NULL) <= 0) ||
@@ -192,29 +198,31 @@ int IonController::allocate(alloc_data& data, int usage)
 {
     int ionFlags = 0;
     int ret;
-#ifndef SECURE_MM_HEAP
-    bool noncontig = false;
-#endif
+    bool nonContig = false;
 
     data.uncached = useUncached(usage);
     data.allocType = 0;
+
+#ifdef USE_PMEM_ADSP
+    if (usage & GRALLOC_USAGE_PRIVATE_ADSP_HEAP) {
+        data.allocType |= private_handle_t::PRIV_FLAGS_USES_PMEM_ADSP;
+        ret = mPmemAlloc->alloc_buffer(data);
+        return ret;
+    }
+#endif
 
     if(usage & GRALLOC_USAGE_PRIVATE_UI_CONTIG_HEAP)
         ionFlags |= ION_HEAP(ION_SF_HEAP_ID);
 
     if(usage & GRALLOC_USAGE_PRIVATE_SYSTEM_HEAP) {
         ionFlags |= ION_HEAP(ION_SYSTEM_HEAP_ID);
-#ifndef SECURE_MM_HEAP
-        noncontig = true;
-#endif
+        nonContig = true;
     }
 
 #ifndef NO_IOMMU
     if(usage & GRALLOC_USAGE_PRIVATE_IOMMU_HEAP) {
         ionFlags |= ION_HEAP(ION_IOMMU_HEAP_ID);
-#ifndef SECURE_MM_HEAP
-        noncontig = true;
-#endif
+        nonContig = true;
     }
 #endif
 
@@ -243,6 +251,9 @@ int IonController::allocate(alloc_data& data, int usage)
 #endif
     }
 
+    if(usage & GRALLOC_USAGE_PRIVATE_CAMERA_HEAP)
+        ionFlags |= ION_HEAP(ION_CAMERA_HEAP_ID);
+
     if(usage & GRALLOC_USAGE_PRIVATE_ADSP_HEAP)
         ionFlags |= ION_HEAP(ION_ADSP_HEAP_ID);
 
@@ -250,7 +261,7 @@ int IonController::allocate(alloc_data& data, int usage)
     if(ionFlags & ION_SECURE)
         data.allocType |= private_handle_t::PRIV_FLAGS_SECURE_BUFFER;
 #else
-    if (usage & GRALLOC_USAGE_PROTECTED && !noncontig)
+    if (usage & GRALLOC_USAGE_PROTECTED && !nonContig)
         data.allocType |= ION_SECURE;
 #endif
 
@@ -260,9 +271,7 @@ int IonController::allocate(alloc_data& data, int usage)
     // we run out.
     if(!ionFlags) {
         ionFlags = ION_HEAP(ION_SF_HEAP_ID);
-#ifdef NO_IOMMU
-        ionFlags |= ION_HEAP(ION_CP_MM_HEAP_ID);
-#else
+#ifndef NO_IOMMU
         ionFlags |= ION_HEAP(ION_IOMMU_HEAP_ID);
 #endif
     }
@@ -276,17 +285,15 @@ int IonController::allocate(alloc_data& data, int usage)
     {
         ALOGW("Falling back to system heap");
         data.flags = ION_HEAP(ION_SYSTEM_HEAP_ID);
-#ifndef SECURE_MM_HEAP
-        noncontig = true;
-#endif
+        nonContig = true;
         ret = mIonAlloc->alloc_buffer(data);
     }
 
     if(ret >= 0 ) {
         data.allocType |= private_handle_t::PRIV_FLAGS_USES_ION;
-#ifndef SECURE_MM_HEAP
-        if (noncontig)
+        if(nonContig)
             data.allocType |= private_handle_t::PRIV_FLAGS_NONCONTIGUOUS_MEM;
+#ifndef SECURE_MM_HEAP
         if(ionFlags & ION_SECURE)
             data.allocType |= private_handle_t::PRIV_FLAGS_SECURE_BUFFER;
 #endif
@@ -300,6 +307,10 @@ IMemAlloc* IonController::getAllocator(int flags)
     IMemAlloc* memalloc = NULL;
     if (flags & private_handle_t::PRIV_FLAGS_USES_ION) {
         memalloc = mIonAlloc;
+#ifdef USE_PMEM_ADSP
+    } else if (flags & private_handle_t::PRIV_FLAGS_USES_PMEM_ADSP) {
+        memalloc = mPmemAlloc;
+#endif
     } else {
         ALOGE("%s: Invalid flags passed: 0x%x", __FUNCTION__, flags);
     }
