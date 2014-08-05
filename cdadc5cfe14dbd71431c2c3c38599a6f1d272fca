@@ -1,0 +1,27 @@
+{
+  "comments": [
+    {
+      "key": {
+        "uuid": "2b6ec9b0_339b8869",
+        "filename": "libhwcomposer/hwc_utils.cpp",
+        "patchSetId": 1
+      },
+      "lineNbr": 112,
+      "author": {
+        "id": 1000173
+      },
+      "writtenOn": "2014-08-05T04:07:46Z",
+      "side": 1,
+      "message": "This was reverted long time ago\n\nhttps://github.com/omnirom/android_hardware_qcom_display-caf/commit/fe2bcf90021c46b5d4849ef29ff8f4a1d46accea",
+      "range": {
+        "startLine": 112,
+        "startChar": 7,
+        "endLine": 112,
+        "endChar": 28
+      },
+      "revId": "cdadc5cfe14dbd71431c2c3c38599a6f1d272fca",
+      "serverId": "56841c99-7c94-43d4-bf0b-cb4707e66d55",
+      "unresolved": false
+    }
+  ]
+}
