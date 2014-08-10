@@ -34,9 +34,6 @@ namespace gralloc {
 struct alloc_data;
 class IMemAlloc;
 class IonAlloc;
-#ifdef USE_PMEM_ADSP
-class PmemAdspAlloc;
-#endif
 
 class IAllocController {
 
@@ -68,9 +65,6 @@ class IonController : public IAllocController {
 
     private:
     IonAlloc* mIonAlloc;
-#ifdef USE_PMEM_ADSP
-    PmemAdspAlloc* mPmemAlloc;
-#endif
     bool mUseTZProtection;
 
 };
