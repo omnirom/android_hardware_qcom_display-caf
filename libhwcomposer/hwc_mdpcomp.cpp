@@ -164,7 +164,6 @@ void MDPComp::setMDPCompLayerFlags(hwc_context_t *ctx,
             layerProp[index].mFlags |= HWC_MDPCOMP;
             layer->compositionType = HWC_OVERLAY;
             layer->hints |= HWC_HINT_CLEAR_FB;
-            mCachedFrame.hnd[index] = NULL;
         } else {
             if(!mCurrentFrame.needsRedraw)
                 layer->compositionType = HWC_OVERLAY;
@@ -379,6 +378,10 @@ bool MDPComp::isFrameDoable(hwc_context_t *ctx, hwc_display_contents_1_t* list)
     if(!isEnabled()) {
         ALOGD_IF(isDebug(),"%s: MDP Comp. not enabled.", __FUNCTION__);
         return false;
+    } else if(ctx->isPaddingRound) {
+        ALOGD_IF(isDebug(), "%s: padding round invoked for dpy %d",
+                 __FUNCTION__,mDpy);
+        return false;
     }
 
     for(int i = 0; i < numAppLayers; ++i) {
@@ -439,6 +442,20 @@ bool MDPComp::isFullFrameDoable(hwc_context_t *ctx,
     for(int i = 0; i < numAppLayers; ++i) {
         hwc_layer_1_t* layer = &list->hwLayers[i];
         private_handle_t *hnd = (private_handle_t *)layer->handle;
+        if((layer->planeAlpha < 0xFF) &&
+                qhwc::needsScaling(ctx,layer,mDpy)){
+            ALOGD_IF(isDebug(),
+                "%s: Disable mixed mode if frame needs plane alpha downscaling",
+                __FUNCTION__);
+            return false;
+        }
+
+        // If buffer is non contiguous then force GPU comp
+        if(isNonContigBuffer(hnd)) {
+            ALOGD_IF(isDebug(), "%s: Buffer is Non contiguous,"
+                                "so mdpcomp is not possible",__FUNCTION__);
+            return false;
+        }
 
         if(isYuvBuffer(hnd) ) {
             if(isSecuring(ctx, layer)) {
@@ -604,6 +621,13 @@ bool MDPComp::isOnlyVideoDoable(hwc_context_t *ctx,
                     __FUNCTION__);
             return false;
         }
+        private_handle_t *hnd = (private_handle_t *)layer->handle;
+        // If buffer is non contiguous then force GPU comp
+        if(isNonContigBuffer(hnd)) {
+            ALOGD_IF(isDebug(), "%s: Buffer is Non contiguous,"
+                                "so mdpcomp is not possible",__FUNCTION__);
+            return false;
+        }
     }
 
     return true;
@@ -611,9 +635,7 @@ bool MDPComp::isOnlyVideoDoable(hwc_context_t *ctx,
 
 /* Checks for conditions where YUV layers cannot be bypassed */
 bool MDPComp::isYUVDoable(hwc_context_t* ctx, hwc_layer_1_t* layer) {
-    bool extAnimBlockFeature = mDpy && ctx->listStats[mDpy].isDisplayAnimating;
-
-    if(isSkipLayer(layer) && !extAnimBlockFeature) {
+    if(isSkipLayer(layer)) {
         ALOGD_IF(isDebug(), "%s: Video marked SKIP dpy %d", __FUNCTION__, mDpy);
         return false;
     }
@@ -738,15 +760,6 @@ int MDPComp::getAvailablePipes(hwc_context_t* ctx) {
 void MDPComp::updateYUV(hwc_context_t* ctx, hwc_display_contents_1_t* list) {
 
     int nYuvCount = ctx->listStats[mDpy].yuvCount;
-    if(!nYuvCount && mDpy) {
-        //Reset "No animation on external display" related  parameters.
-        ctx->mPrevCropVideo.left = ctx->mPrevCropVideo.top =
-            ctx->mPrevCropVideo.right = ctx->mPrevCropVideo.bottom = 0;
-        ctx->mPrevDestVideo.left = ctx->mPrevDestVideo.top =
-            ctx->mPrevDestVideo.right = ctx->mPrevDestVideo.bottom = 0;
-        ctx->mPrevTransformVideo = 0;
-        return;
-     }
     for(int index = 0;index < nYuvCount; index++){
         int nYuvIndex = ctx->listStats[mDpy].yuvIndices[index];
         hwc_layer_1_t* layer = &list->hwLayers[nYuvIndex];
@@ -830,17 +843,32 @@ bool MDPComp::programYUV(hwc_context_t *ctx, hwc_display_contents_1_t* list) {
 int MDPComp::prepare(hwc_context_t *ctx, hwc_display_contents_1_t* list) {
 
     const int numLayers = ctx->listStats[mDpy].numAppLayers;
-
+    int ret = 1;
     //reset old data
     mCurrentFrame.reset(numLayers);
 
-    //number of app layers exceeds MAX_NUM_APP_LAYERS fall back to GPU
-    //do not cache the information for next draw cycle.
-    if(numLayers > MAX_NUM_APP_LAYERS) {
+    //Do not cache the information for next draw cycle.
+    if(numLayers > MAX_NUM_APP_LAYERS or (!numLayers)) {
         mCachedFrame.updateCounts(mCurrentFrame);
-        ALOGD_IF(isDebug(), "%s: Number of App layers exceeded the limit ",
+        ALOGD_IF(isDebug(), "%s: Unsupported layer count for mdp composition",
                 __FUNCTION__);
         return -1;
+    }
+
+    // Detect the start of animation and fall back to GPU only once to cache
+    // all the layers in FB and display FB content untill animation completes.
+    if(ctx->listStats[mDpy].isDisplayAnimating) {
+        mCurrentFrame.needsRedraw = false;
+        if(ctx->mAnimationState[mDpy] == ANIMATION_STOPPED) {
+            mCurrentFrame.needsRedraw = true;
+            ctx->mAnimationState[mDpy] = ANIMATION_STARTED;
+        }
+        setMDPCompLayerFlags(ctx, list);
+        mCachedFrame.updateCounts(mCurrentFrame);
+        ret = -1;
+        return ret;
+    } else {
+        ctx->mAnimationState[mDpy] = ANIMATION_STOPPED;
     }
 
     //Hard conditions, if not met, cannot do MDP comp
@@ -921,7 +949,8 @@ int MDPComp::prepare(hwc_context_t *ctx, hwc_display_contents_1_t* list) {
             ctx->mOverlay->clear(mDpy);
             ctx->mLayerRotMap[mDpy]->clear();
             return -1;
-        }
+        } else
+            ret = 0;
     } else {
         reset(numLayers, list);
         return -1;
@@ -940,7 +969,7 @@ int MDPComp::prepare(hwc_context_t *ctx, hwc_display_contents_1_t* list) {
         ALOGE("%s",sDump.string());
     }
 
-    return 0;
+    return ret;
 }
 
 //=============MDPCompLowRes===================================================
