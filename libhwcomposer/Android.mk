@@ -12,7 +12,7 @@ LOCAL_SHARED_LIBRARIES        := $(common_libs) libEGL liboverlay \
                                  libexternal libqdutils libhardware_legacy \
                                  libdl libmemalloc libqservice libsync \
                                  libbinder libmedia libvirtual libskia
-LOCAL_CFLAGS                  := $(common_flags) -DLOG_TAG=\"qdhwcomposer\"
+LOCAL_CFLAGS                  := $(common_flags) -Os -DLOG_TAG=\"qdhwcomposer\"
 LOCAL_ADDITIONAL_DEPENDENCIES := $(common_deps)
 LOCAL_SRC_FILES               := hwc.cpp          \
                                  hwc_utils.cpp    \
