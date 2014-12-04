@@ -656,17 +656,12 @@ void setListStats(hwc_context_t *ctx,
     ctx->listStats[dpy].extOnlyLayerIndex = -1;
     ctx->listStats[dpy].isDisplayAnimating = false;
     ctx->listStats[dpy].secureUI = false;
-    ctx->mViewFrame[dpy] = (hwc_rect_t){0, 0, 0, 0};
-
     optimizeLayerRects(ctx, list, dpy);
 
     for (size_t i = 0; i < (size_t)ctx->listStats[dpy].numAppLayers; i++) {
         hwc_layer_1_t const* layer = &list->hwLayers[i];
         private_handle_t *hnd = (private_handle_t *)layer->handle;
 
-        // Calculate view frame of each display from the layer displayframe
-        ctx->mViewFrame[dpy] = getUnion(ctx->mViewFrame[dpy],
-                                        layer->displayFrame);
 #ifdef QCOM_BSP
         if (layer->flags & HWC_SCREENSHOT_ANIMATOR_LAYER) {
             ctx->listStats[dpy].isDisplayAnimating = true;
@@ -1285,6 +1280,17 @@ bool setupBasePipe(hwc_context_t *ctx) {
     return true;
 }
 
+ovutils::eDest getPipeForFb(hwc_context_t *ctx, int dpy) {
+    ovutils::eDest dest = ovutils::OV_INVALID;
+    overlay::Overlay& ov = *ctx->mOverlay;
+
+    dest = ov.nextPipe(ovutils::OV_MDP_PIPE_RGB, dpy);
+    if(dest != ovutils::OV_INVALID) {
+        return dest;
+    }
+
+    return ov.nextPipe(ovutils::OV_MDP_PIPE_VG, dpy);
+}
 
 inline int configMdp(Overlay *ov, const PipeArgs& parg,
         const eTransform& orient, const hwc_rect_t& crop,

@@ -25,6 +25,7 @@
 #include "mdp_version.h"
 #include "gr.h"
 #include "cb_utils.h"
+#include "sync/sync.h"
 
 #ifdef NO_IOMMU
 #define HEAP_ID GRALLOC_USAGE_PRIVATE_UI_CONTIG_HEAP

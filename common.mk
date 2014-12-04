@@ -7,6 +7,7 @@ common_includes += hardware/qcom/display-caf/libhwcomposer
 common_includes += hardware/qcom/display-caf/libexternal
 common_includes += hardware/qcom/display-caf/libqservice
 common_includes += hardware/qcom/display-caf/libvirtual
+common_includes += $(TARGET_OUT_INTERMEDIATES)/KERNEL_OBJ/usr/include
 
 ifeq ($(TARGET_USES_POST_PROCESSING),true)
     common_flags     += -DUSES_POST_PROCESSING
@@ -24,7 +25,7 @@ endif
 
 #Common C flags
 common_flags := -DDEBUG_CALC_FPS -Wno-missing-field-initializers
-common_flags += -Werror
+common_flags += -Werror -Wno-error=unused-parameter
 
 ifeq ($(ARCH_ARM_HAVE_NEON),true)
     common_flags += -D__ARM_HAVE_NEON

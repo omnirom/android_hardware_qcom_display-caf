@@ -246,6 +246,9 @@ int hwc_sync(hwc_context_t *ctx, hwc_display_contents_1_t* list, int dpy,
 void trimLayer(hwc_context_t *ctx, const int& dpy, const int& transform,
         hwc_rect_t& crop, hwc_rect_t& dst);
 
+//get Pipe for FB target
+ovutils::eDest getPipeForFb(hwc_context_t *ctx, int dpy);
+
 //Sets appropriate mdp flags for a layer.
 void setMdpFlags(hwc_layer_1_t *layer,
         ovutils::eMdpFlags &mdpFlags,
@@ -306,16 +309,6 @@ static inline bool isBufferLocked(const private_handle_t* hnd) {
 //Return true if buffer is for external display only
 static inline bool isExtOnly(const private_handle_t* hnd) {
     return (hnd && (hnd->flags & private_handle_t::PRIV_FLAGS_EXTERNAL_ONLY));
-}
-
-//Return true if buffer is for external display only with a BLOCK flag.
-static inline bool isExtBlock(const private_handle_t* hnd) {
-    return (hnd && (hnd->flags & private_handle_t::PRIV_FLAGS_EXTERNAL_BLOCK));
-}
-
-//Return true if buffer is for external display only with a Close Caption flag.
-static inline bool isExtCC(const private_handle_t* hnd) {
-    return (hnd && (hnd->flags & private_handle_t::PRIV_FLAGS_EXTERNAL_CC));
 }
 
 static inline int getWidth(const private_handle_t* hnd) {
